@@ -17,7 +17,7 @@ from .protocol import (
     TLV_VIN1_MV, TLV_VIN2_MV,
     TLV_I1_MA, TLV_I2_MA,
     # Commands
-    CMD_SNAPSHOT, CMD_STREAM, CMD_SET_ESC,
+    CMD_SNAPSHOT, CMD_STREAM, CMD_SET_ESC, CMD_CALIB_I_ZERO,
     # helpers
     pack_frame, tlv_u32, tlv_u64, parse_tlvs, u32_le, i32_le, crc32c, build_cmd
 )
@@ -116,6 +116,14 @@ class Link:
         frm = pack_frame(DEV_MCU, DEV_PC, MT_COMMAND, payload, reqid=reqid, seq=self._next_seq())
         self._write(frm)
         self._emit({"type":"log","msg":f"> CMD_SET_ESC ch={ch} us={us} (len={len(frm)})"})
+
+    def send_calib_currents(self, mask: int = 0x3, reqid: int = 7):
+        if not self._ready(): return
+        
+        payload = build_cmd(CMD_CALIB_I_ZERO)        # <-- no payload TLVs
+        frm = pack_frame(DEV_MCU, DEV_PC, MT_COMMAND, payload, reqid=reqid, seq=self._next_seq())
+        self._write(frm)
+        self._emit("log", f"> CMD_CALIB_I_ZERO (len={len(frm)})")
 
     # ---- RX loop & parser ----
     def _rx_loop(self):

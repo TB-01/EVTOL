@@ -14,13 +14,14 @@ class LivePlotFrame(ctk.CTkFrame):
         self.t0 = None
         self.buf = deque()
 
-        self.fig = Figure(figsize=(5, 3), dpi=90)
+        self.fig = Figure(figsize=(5, 3), dpi=120)
         self.fig.set_constrained_layout(False)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_title(title)
-        self.ax.set_xlabel("time [s]")
-        self.ax.set_ylabel(y_label)          # <-- use provided units
-        (self.line,) = self.ax.plot([], [], lw=1.2)
+        self.ax.set_xlabel("time [s]", fontsize=13)
+        self.ax.set_ylabel(y_label, fontsize=13)          # <-- use provided units
+        self.ax.tick_params(axis='both', labelsize=12)
+        (self.line,) = self.ax.plot([], [], lw=1.6)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 

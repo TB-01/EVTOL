@@ -44,13 +44,15 @@ TLV_VIN2_MV = 0x81
 TLV_I1_MA  = 0x82
 TLV_I2_MA  = 0x83
 
+
 # TLV_HX_FLAGS  = 0x31  # u32  bit0 = DOUT idle level (optional diag)
 
 # ========= Command Codes =========
 CMD_ECHO        = 0x00000000  # no-op; verify command/ack path
 CMD_SNAPSHOT    = 0x00000001  # send one MT_TEL_A immediately
 CMD_STREAM      = 0x00000002  # start/stop periodic MT_TEL_A frames
-CMD_SET_ESC          = 0x00000010 # set ESC pulse widths (for motor control)
+CMD_SET_ESC     = 0x00000010  # set ESC pulse widths (for motor control)
+CMD_CALIB_I_ZERO = 0x00000020  # calibrate current sensor zero (no currents)
 
 # ========= Helpers =========
 def build_cmd(cmd_code: int, *tlvs: bytes) -> bytes:
