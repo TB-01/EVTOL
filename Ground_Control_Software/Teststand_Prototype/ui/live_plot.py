@@ -31,6 +31,9 @@ class LivePlotFrame(ctk.CTkFrame):
         self.fig.canvas.mpl_connect("resize_event", self._on_mpl_resize)
         self.after(75, self._tick)
 
+        self.mode = "live"        # "live" (rolling window) or "fixed"
+        self.fixed_total_s = None # used when mode == "fixed"
+
     def set_units(self, title=None, y_label=None):
         """Change title / y-axis label on the fly (e.g., after calibration)."""
         if title:
@@ -55,10 +58,14 @@ class LivePlotFrame(ctk.CTkFrame):
             self.t0 = host_ms
         t = (host_ms - self.t0) / 1000.0
         self.buf.append((t, y))
-        # rolling window
-        tmin = t - self.window_s
-        while self.buf and self.buf[0][0] < tmin:
-            self.buf.popleft()
+        if self.mode == "live":
+            # rolling window
+            tmin = t - self.window_s
+            while self.buf and self.buf[0][0] < tmin:
+                self.buf.popleft()
+        else:
+            # fixed mode: keep all; no pop
+            pass
 
     def _render_data(self):
         n = len(self.buf)
@@ -83,9 +90,12 @@ class LivePlotFrame(ctk.CTkFrame):
         if xs:
             self.line.set_data(xs, ys)
 
-            # x-limits: rolling window
-            left = max(0, xs[-1] - self.window_s)
-            right = max(self.window_s, xs[-1])
+            if self.mode == "fixed" and self.fixed_total_s:
+                left, right = 0, self.fixed_total_s
+            else:
+                left = max(0, xs[-1] - self.window_s)
+                right = max(self.window_s, xs[-1])
+
             # only adjust if changed significantly (avoids heavy relayout)
             if self.ax.get_xlim() != (left, right):
                 self.ax.set_xlim(left, right)
@@ -104,3 +114,20 @@ class LivePlotFrame(ctk.CTkFrame):
             self._last_draw = now
 
         self.after(75, self._tick)
+    
+    def set_mode_live(self, window_s=None):
+        self.mode = "live"
+        if window_s is not None:
+            self.window_s = float(window_s)
+        self.fixed_total_s = None
+        self.clear()
+
+    def set_mode_fixed(self, total_s: float):
+        """Fixed x-axis [0..total_s]. Does NOT clear data automatically."""
+        self.mode = "fixed"
+        self.fixed_total_s = float(total_s)
+        self.t0 = None
+        self.buf.clear()
+        self.line.set_data([], [])
+        self.ax.set_xlim(0, max(1.0, self.fixed_total_s))
+        self.canvas.draw_idle()

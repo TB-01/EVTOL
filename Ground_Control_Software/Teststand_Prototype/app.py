@@ -137,10 +137,10 @@ class App(ctk.CTk):
         ctk.CTkLabel(bl, text="%").grid(row=1, column=1, sticky="w")
 
         self.btn_start = ctk.CTkButton(bl, text="Start Test", command=self._not_implemented)
-        self.btn_start.grid(row=1, column=2, padx=10)
+        self.btn_start.grid(row=3, column=2, padx=10)
 
         self.btn_tare = ctk.CTkButton(bl, text="Tare", command=self._on_tare)
-        self.btn_tare.grid(row=1, column=3, padx=10)
+        self.btn_tare.grid(row=1, column=4, padx=10)
 
 
         
@@ -151,39 +151,39 @@ class App(ctk.CTk):
         self.test_mode.set("Manual")
         self.test_mode.grid(row=3, column=0, sticky="w", padx=8)
         self.btn_save = ctk.CTkButton(bl, text="Save Result", command=self._not_implemented)
-        self.btn_save.grid(row=3, column=2, padx=10)
+        self.btn_save.grid(row=3, column=3, padx=10)
 
         # Calibration
-        ctk.CTkLabel(bl, text="Calibration Weight").grid(row=2, column=3, sticky="w", padx=8, pady=(8,2))
+        ctk.CTkLabel(bl, text="Calibration Weight").grid(row=2, column=4, sticky="w", padx=8, pady=(8,2))
         self.cal_weight = ctk.CTkEntry(bl, width=70)
         self.cal_weight.insert(0, "1")
-        self.cal_weight.grid(row=3, column=3, sticky="w", padx=8)
-        ctk.CTkLabel(bl, text="kg").grid(row=3, column=4, sticky="w")
+        self.cal_weight.grid(row=3, column=4, sticky="w", padx=8)
+        ctk.CTkLabel(bl, text="kg").grid(row=3, column=5, sticky="w")
         self.btn_cal = ctk.CTkButton(bl, text="Calibrate", command=self._on_calibrate)
-        self.btn_cal.grid(row=3, column=5, padx=10)
+        self.btn_cal.grid(row=3, column=6, padx=10)
 
         self.btn_esc1 = ctk.CTkButton(bl, text="Set ESC1 %", command=self._esc1_from_entry)
         self.btn_esc2 = ctk.CTkButton(bl, text="Set ESC2 %", command=self._esc2_from_entry)
-        self.btn_esc1.grid(row=1, column=4, padx=10)
-        self.btn_esc2.grid(row=1, column=5, padx=10)
+        self.btn_esc1.grid(row=1, column=2, padx=10)
+        self.btn_esc2.grid(row=1, column=3, padx=10)
 
         self.btn_cal_curr = ctk.CTkButton(bl, text="Calibrate Currents", command=self._on_calib_currents)
-        self.btn_cal_curr.grid(row=4, column=5, padx=10, pady=(6,0))
+        self.btn_cal_curr.grid(row=1, column=6, padx=10, pady=(6,0))
 
         # --- E-STOP ---
         self.btn_estop = ctk.CTkButton(bl, text="E-STOP (Space)", command=self._on_estop,fg_color="#a00", hover_color="#b00")
-        self.btn_estop.grid(row=1, column=6, padx=10)
+        self.btn_estop.grid(row=1, column=7, padx=10)
 
         # --- Streaming controls (left control area) ---
-        ctk.CTkLabel(bl, text="Stream period").grid(row=2, column=6, sticky="w", padx=8, pady=(8,2))
+        ctk.CTkLabel(bl, text="Stream period").grid(row=2, column=7, sticky="w", padx=8, pady=(8,2))
         self.stream_period = ctk.CTkEntry(bl, width=70)
         self.stream_period.insert(0, "120")  # default 120 ms (≈8.3 Hz)
-        self.stream_period.grid(row=3, column=6, sticky="w", padx=8)
-        ctk.CTkLabel(bl, text="ms").grid(row=3, column=7, sticky="w")
+        self.stream_period.grid(row=3, column=7, sticky="w", padx=8)
+        ctk.CTkLabel(bl, text="ms").grid(row=3, column=8, sticky="w")
 
         self._streaming = False
         self.btn_stream_toggle = ctk.CTkButton(bl, text="Start Stream", command=self._on_toggle_stream)
-        self.btn_stream_toggle.grid(row=3, column=8, padx=8, columnspan=2)
+        self.btn_stream_toggle.grid(row=3, column=9, padx=8, columnspan=2)
 
 
         # bottom-right COM panel
