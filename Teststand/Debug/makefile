@@ -60,8 +60,8 @@ all: main-build
 main-build: Teststand_Nucleo.elf secondary-outputs
 
 # Tool invocations
-Teststand_Nucleo.elf Teststand_Nucleo.map: $(OBJS) $(USER_OBJS) C:\Users\E_T_R\Desktop\Projects\Pathfinder\Pathfinder-A\Dev\Teststand\Teststand\STM32F031K6TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Teststand_Nucleo.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"C:\Users\E_T_R\Desktop\Projects\Pathfinder\Pathfinder-A\Dev\Teststand\Teststand\STM32F031K6TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Teststand_Nucleo.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Teststand_Nucleo.elf Teststand_Nucleo.map: $(OBJS) $(USER_OBJS) C:\Users\tobre\Neuer\ Ordner\OneDrive\Desktop\EVTOL\Teststand\STM32F031K6TX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Teststand_Nucleo.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m0 -T"C:\Users\tobre\Neuer Ordner\OneDrive\Desktop\EVTOL\Teststand\STM32F031K6TX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Teststand_Nucleo.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

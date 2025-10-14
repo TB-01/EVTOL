@@ -43,7 +43,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TIMCLK 48000000
+#define PRESCALER 4800
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,6 +55,16 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+uint32_t IC_Val1Mot1 = 0;
+uint32_t IC_Val2Mot1 = 0;
+//uint32_t IC_Val1Mot2 = 0;
+//uint32_t IC_Val2Mot2 = 0;
+uint32_t DiffMot1 = 0;
+//uint32_t DiffMot2 = 0;
+int first_cap_flagMot1 = 0;
+//int first_cap_flagMot2 = 0;
+float freqMot1 = 0;
+//float freqMot2 = 0;
 
 // --- Hall current sensors ---
 #define I1_SENS_mV_PER_A   24u   // 24 mV/A
@@ -329,32 +340,66 @@ static void telemetry_service(void)
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance != TIM3) return;
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+	{
+		if(first_cap_flagMot1 == 0)
+		{
+			IC_Val1Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+			first_cap_flagMot1 = 1;
+		}
+		else
+		{
+			IC_Val2Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
 
-    if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) {
-        uint16_t now = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
-        static uint16_t last1 = 0;
-        uint16_t dt = (uint16_t)(now - last1);   // 16-bit wrap ok
-        last1 = now;
-        if (dt > 0 && dt < 60000) { ic_period_us = dt; ic_has_lock = 1; }
-        ic_irq_count++;
-    } else if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2) {
-        uint16_t now = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-        static uint16_t last2 = 0;
-        uint16_t dt = (uint16_t)(now - last2);
-        last2 = now;
-        if (dt > 0 && dt < 60000) { ic_period_us = dt; ic_has_lock = 1; }
-        ic_irq_count++;
-    }
+			if(IC_Val2Mot1 > IC_Val1Mot1)
+			{
+				DiffMot1 = IC_Val2Mot1 - IC_Val1Mot1;
+			}
+			else if(IC_Val1Mot1 > IC_Val2Mot1)
+			{
+				DiffMot1 = (0xffffffff - IC_Val1Mot1) + IC_Val2Mot1;
+			}
+
+			float refClock = TIMCLK/(PRESCALER);
+			freqMot1 = refClock/DiffMot1;
+
+			__HAL_TIM_SET_COUNTER(htim,0);
+			first_cap_flagMot1 = 0;
+		}
+	}
+
+	/*
+	else if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)
+	{
+		if(first_cap_flagMot2 == 0)
+		{
+			IC_Val1Mot2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+			first_cap_flagMot2 = 1;
+		}
+		else
+		{
+			IC_Val2Mot2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+
+			if(IC_Val2Mot2 > IC_Val1Mot2)
+			{
+				DiffMot2 = IC_Val2Mot2 - IC_Val1Mot2;
+			}
+			else if(IC_Val1Mot2 > IC_Val2Mot2)
+			{
+				DiffMot2 = (0xffffffff - IC_Val1Mot2) + IC_Val2Mot2;
+			}
+
+			float refClock = TIMCLK/(PRESCALAR);
+			frequencyMot2 = refClock/DiffMot2;
+
+			__HAL_TIM_SET_COUNTER(htim,0);
+			first_cap_flagMot2 = 0;
+		}
+	}
+	*/
 }
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM3) {
-        // if you want, you can detect “no pulse” here (timeout)
-        // e.g., zero ic_has_lock after some ms without captures
-    }
-}
+
 
 
 
@@ -395,12 +440,12 @@ int main(void)
   MX_USART1_UART_Init();
   MX_I2C1_Init();
   MX_TIM1_Init();
-  MX_TIM3_Init();
   MX_ADC_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
-  HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
-  HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
   esc_init();
 
   // apply initial µs (will be overwritten by commands)
@@ -449,14 +494,16 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSI14;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSI14
+                              |RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSI14State = RCC_HSI14_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.HSI14CalibrationValue = 16;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL12;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL6;
   RCC_OscInitStruct.PLL.PREDIV = RCC_PREDIV_DIV1;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
