@@ -30,6 +30,7 @@
 #include "comm.h"
 #include "protocol.h"
 #include "hx711.h"
+#include "adc.h"   // hadc, MX_ADC_Init()
 
 
 
@@ -42,7 +43,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TIMCLK 48000000
+#define PRESCALER 4800
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,6 +55,16 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+uint32_t IC_Val1Mot1 = 0;
+uint32_t IC_Val2Mot1 = 0;
+//uint32_t IC_Val1Mot2 = 0;
+//uint32_t IC_Val2Mot2 = 0;
+uint32_t DiffMot1 = 0;
+//uint32_t DiffMot2 = 0;
+int first_cap_flagMot1 = 0;
+//int first_cap_flagMot2 = 0;
+float freqMot1 = 0;
+//float freqMot2 = 0;
 
 // --- Hall current sensors ---
 #define I1_SENS_mV_PER_A   24u   // 24 mV/A
@@ -66,24 +78,6 @@ static volatile uint32_t g_i1_zero_mV = 1650, g_i2_zero_mV = 1650;  // used if I
 static volatile uint32_t g_stream_period_ms = 0;
 static uint32_t          g_next_stream_ms   = 0;
 static uint8_t           g_stream_dest_id   = 0x0A; // default = PC
-
-static uint32_t hb_next_ms = 0;
-
-// Tacho characteristics (adjust PULSES_PER_REV after testing)
-#define PERIOD_US_MIN       20u       // reject >12.5 kHz (too fast / glitches)
-#define PERIOD_US_MAX       200000u   // reject <5 Hz (too slow / timeout-ish)
-#define EMA_SHIFT           2u        // 1/4 smoothing;  old = (3*old + new)/4
-
-#define PULSES_PER_REV 14
-#define MAGNETS                 28
-#define POLE_PAIRS              (MAGNETS/2)   // = 14
-#define PULSES_PER_ELEC_REV     1             // try 1 first; if RPM is off by ×3 or ×6, set to 3 or 6
-#define TACH_PULSES_PER_MECHREV (POLE_PAIRS * PULSES_PER_ELEC_REV)  // 14, 42, or 84 typically
-
-static inline uint32_t ema_u32(uint32_t old, uint32_t x) {
-    return (old == 0u) ? x : ((old * ((1u<<EMA_SHIFT)-1u) + x) >> EMA_SHIFT);
-}
-
 
 // --- ADC DMA buffer order with Scan FORWARD: [PA0, PA1, PA3, PA4, VREFINT] ---
 enum { ADC_IDX_I1=0, ADC_IDX_I2=1, ADC_IDX_V1=2, ADC_IDX_V2=3, ADC_IDX_VREF=4, ADC_COUNT=5 };
@@ -116,21 +110,10 @@ static uint16_t g_esc2_us = 1050;
 static int32_t  g_last_raw = 0;
 static uint8_t  g_last_raw_valid = 0;
 
-typedef struct {
-    uint32_t last;
-    uint32_t period_ticks;
-    uint8_t  have;
-} ic_ch_t;
-
-static volatile uint32_t ic1_last = 0, ic2_last = 0;
-static volatile uint32_t ic1_period_us = 0, ic2_period_us = 0;
-static volatile uint8_t  ic1_lock = 0, ic2_lock = 0;
-
-static volatile uint32_t g_ic_last[2] = {0,0};
-static volatile ic_ch_t g_ic[2];  // [0]=CH1 (PA5), [1]=CH2 (PB3)
-static volatile uint32_t ic_irq_count = 0;  // keep this (telemetry)
-static volatile uint32_t ic1_irq = 0, ic2_irq = 0;
-static const uint32_t TIMER_HZ = 1000000u; // 1 MHz after PSC=47
+static volatile uint16_t ic_last = 0;
+static volatile uint32_t ic_period_us = 0;   // last measured period in microseconds
+static volatile uint32_t ic_irq_count = 0;
+static volatile uint8_t  ic_has_lock = 0;    // 1 once we got a valid period
 
 static inline void esc_apply_hw(void){
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, g_esc1_us);
@@ -172,28 +155,6 @@ static inline void adc_try_start(void){
     g_adc_ok = 1;
 }
 
-static inline void current_calibrate_zero()
-{
-	uint64_t acc1=0, acc2=0; uint32_t ok=0;
-	uint32_t vref_cal = *VREFINT_CAL_ADDR;
-	if (vref_cal < 1000 || vref_cal > 3000) vref_cal = 1500;
-
-	for (uint8_t i=0; i<20; ++i){
-		uint16_t raw_ref = g_adc[ADC_IDX_VREF];
-		if (!raw_ref) continue;
-		uint32_t vdd_mV = (3300u * vref_cal) / raw_ref;
-		acc1 += (((uint64_t)g_adc[ADC_IDX_I1] * vdd_mV + 2047) / 4095u);
-		acc2 += (((uint64_t)g_adc[ADC_IDX_I2] * vdd_mV + 2047) / 4095u);
-		ok++;
-	}
-	if (ok){
-		g_i1_zero_mV = (uint32_t)(acc1/ok);
-		g_i2_zero_mV = (uint32_t)(acc2/ok);
-	}
-
-}
-
-
 static inline void adc_compute_mv(void)
 {
     if (!g_adc_ok) return;
@@ -206,7 +167,7 @@ static inline void adc_compute_mv(void)
     uint16_t raw_ref = g_adc[ADC_IDX_VREF];
     if (raw_ref == 0) return;  // avoid div/0 while VREFINT wakes up
 
-    // --- VDD from factory calibration ---
+    // --- VDD from factory calibration (same approach you already use) ---
     uint32_t vref_cal = *VREFINT_CAL_ADDR;           // ~1500 @ 3.3V
     if (vref_cal < 1000 || vref_cal > 3000) vref_cal = 1500;
     uint32_t vdd_mV = (3300u * vref_cal) / raw_ref;
@@ -225,7 +186,7 @@ static inline void adc_compute_mv(void)
 
     //Current Calculation
     int32_t dv1_mV = (int32_t)node_i1_mV - (int32_t)g_i1_zero_mV;
-    int32_t dv2_mV = (int32_t)node_i2_mV - (int32_t)g_i2_zero_mV;
+    int32_t dv2_mV = (int32_t)node_i2_mV - (int32_t)g_i1_zero_mV;
 
     // I(mA) = (dv_mV * 1000) / (mV per A)
     g_i1_mA = (int32_t)(((int64_t)dv1_mV * 1000) / I1_SENS_mV_PER_A);
@@ -307,16 +268,6 @@ void comm_on_frame(const comm_frame_t *f)
 			    comm_send(f->tx_id, f->rx_id, MT_COMMAND_ACK, 0x01, f->reqid, ack, (uint16_t)(aw - ack));
 			    return;
 			}
-			else if (cmd == CMD_CALIB_I_ZERO) {
-
-				current_calibrate_zero();
-
-			    uint8_t ack[32]; uint8_t *aw = ack;
-			    aw = tlv_put_u32(aw, TLV_CMD_CODE,   cmd);
-			    aw = tlv_put_u32(aw, TLV_CMD_RESULT, 0);
-			    comm_send(f->tx_id, f->rx_id, MT_COMMAND_ACK, 0x01, f->reqid, ack, (uint16_t)(aw - ack));
-			    return;
-			}
 
 			else {
 				result = 3; // BAD/unknown command
@@ -333,21 +284,9 @@ void comm_on_frame(const comm_frame_t *f)
     // ...
 }
 
-static uint32_t tach_hz_from_period_us(uint32_t us) {
-        return (us ? (1000000u + us/2) / us : 0u);  // rounded
-}
-
 static void telemetry_service(void)
 {
     if (g_stream_period_ms == 0) return;
-
-    /*
-    static uint32_t last_ic_irqs = 0, last_ic_check_ms = 0;
-    if ((int32_t)(now - last_ic_check_ms) >= 300) {
-        if (ic_irq_count == last_ic_irqs) ic_has_lock = 0;
-        last_ic_irqs = ic_irq_count;
-        last_ic_check_ms = now;
-    }*/
 
     uint32_t now = HAL_GetTick();
     // not time yet?
@@ -367,29 +306,17 @@ static void telemetry_service(void)
     tw = tlv_put_u32(tw, TLV_TS_MS, now);
     tw = tlv_put_u32(tw, TLV_ESC1_US, g_esc1_us);
     tw = tlv_put_u32(tw, TLV_ESC2_US, g_esc2_us);
-
+    tw = tlv_put_u32(tw, TLV_IC_IRQS,      ic_irq_count);
+    tw = tlv_put_u32(tw, TLV_IC_PERIOD_US, ic_period_us);
     if (g_last_raw_valid) tw = tlv_put_i32(tw, TLV_LOAD_RAW, g_last_raw);
 
-    // --- RPM from captures (both channels)
-
-
-
-
-
-    uint32_t hz1 = tach_hz_from_period_us(ic1_period_us);
-    uint32_t hz2 = tach_hz_from_period_us(ic2_period_us);
-
-    uint32_t rpm_ch2 = (hz1 ? (hz1 * 60u) / TACH_PULSES_PER_MECHREV : 0u);
-    uint32_t rpm_ch1 = (hz2 ? (hz2 * 60u) / TACH_PULSES_PER_MECHREV : 0u);
-
-    // Map to ESC1/ESC2 as you intend (swap temporarily if your wiring is crossed)
-    tw = tlv_put_u32(tw, TLV_ESC_RPM1, rpm_ch1);
-    tw = tlv_put_u32(tw, TLV_ESC_RPM2, rpm_ch2);
-    tw = tlv_put_u32(tw, 0xA0, ic1_period_us);
-    tw = tlv_put_u32(tw, 0xA1, ic2_period_us);
-    tw = tlv_put_u32(tw, 0xA2, ic1_irq);
-    tw = tlv_put_u32(tw, 0xA3, ic2_irq);
-
+    // RPM from capture
+    if (ic_has_lock && ic_period_us) {
+        const uint32_t P = 14; // rotor magnets (try 7 if you discover they mean pole pairs)
+        uint32_t hz  = 1000000u / ic_period_us;
+        uint32_t rpm = (hz * 60u) / (P);
+        tw = tlv_put_u32(tw, TLV_ESC_RPM1, rpm);
+    }
 
 
     // new voltage TLVs (always include)
@@ -397,13 +324,9 @@ static void telemetry_service(void)
     tw = tlv_put_u32(tw, TLV_VIN1_MV, g_vin1_mV);
     tw = tlv_put_u32(tw, TLV_VIN2_MV, g_vin2_mV);
 
-    /*
-    tw = tlv_put_u32(tw, 0x90, g_adc[ADC_IDX_I1]);   // RAW_PA0 (I1)
-    tw = tlv_put_u32(tw, 0x91, g_adc[ADC_IDX_I2]);   // RAW_PA1 (I2)
-    tw = tlv_put_u32(tw, 0x92, g_adc[ADC_IDX_V1]);   // RAW_PA3 (VIN1 node)
-    tw = tlv_put_u32(tw, 0x93, g_adc[ADC_IDX_V2]);   // RAW_PA4 (VIN2 node)
-    tw = tlv_put_u32(tw, 0x94, g_adc[ADC_IDX_VREF]); // RAW_VREFINT
-    */
+    tw = tlv_put_u32(tw, 0x90, g_adc[0]); // RAW_PA3
+    tw = tlv_put_u32(tw, 0x91, g_adc[1]); // RAW_PA4
+    tw = tlv_put_u32(tw, 0x92, g_adc[2]); // RAW_VREFINT
 
     tw = tlv_put_i32(tw, TLV_I1_MA, g_i1_mA);
     tw = tlv_put_i32(tw, TLV_I2_MA, g_i2_mA);
@@ -415,53 +338,68 @@ static void telemetry_service(void)
     comm_send(g_stream_dest_id, 0x20/*MCU id*/, MT_TEL_A, 0x01, 0, t, (uint16_t)(tw - t));
 }
 
-static void heartbeat_service(void)
-{
-    const uint32_t period_ms = 1000; // adjust as you like (>= 50ms recommended)
-    uint32_t now = HAL_GetTick();
-    if ((int32_t)(now - hb_next_ms) < 0) return;
-    hb_next_ms = now + period_ms;
-
-    // Minimal payload: device uptime
-    uint8_t p[8];
-    uint8_t *w = p;
-    w = tlv_put_u32(w, TLV_TS_MS, now);
-
-    // Send to PC (rx=0x0A), from MCU (tx=0x20)
-    comm_send(0x0A, 0x20, MT_PING, 0x01, 0, p, (uint16_t)(w - p));
-}
-
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance != TIM2) return;
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+	{
+		if(first_cap_flagMot1 == 0)
+		{
+			IC_Val1Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+			first_cap_flagMot1 = 1;
+		}
+		else
+		{
+			IC_Val2Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
 
-    uint32_t cap, prev, diff;
+			if(IC_Val2Mot1 > IC_Val1Mot1)
+			{
+				DiffMot1 = IC_Val2Mot1 - IC_Val1Mot1;
+			}
+			else if(IC_Val1Mot1 > IC_Val2Mot1)
+			{
+				DiffMot1 = (0xffffffff - IC_Val1Mot1) + IC_Val2Mot1;
+			}
 
-    if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) {
-        cap  = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
-        prev = ic1_last; ic1_last = cap;
-        diff = cap - prev;                          // unsigned, wrap-safe
-        if (diff < PERIOD_US_MIN || diff > PERIOD_US_MAX) return;
-        ic1_period_us = ema_u32(ic1_period_us, diff);
-        ic1_lock = 1; ic_irq_count++; ic1_irq++;
+			float refClock = TIMCLK/(PRESCALER);
+			freqMot1 = refClock/DiffMot1;
 
-    } else if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2) {
-        cap  = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-        prev = ic2_last; ic2_last = cap;
-        diff = cap - prev;                          // unsigned, wrap-safe
-        if (diff < PERIOD_US_MIN || diff > PERIOD_US_MAX) return;
-        ic2_period_us = ema_u32(ic2_period_us, diff);
-        ic2_lock = 1; ic_irq_count++; ic2_irq++;
-    }
+			__HAL_TIM_SET_COUNTER(htim,0);
+			first_cap_flagMot1 = 0;
+		}
+	}
+
+	/*
+	else if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)
+	{
+		if(first_cap_flagMot2 == 0)
+		{
+			IC_Val1Mot2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+			first_cap_flagMot2 = 1;
+		}
+		else
+		{
+			IC_Val2Mot2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+
+			if(IC_Val2Mot2 > IC_Val1Mot2)
+			{
+				DiffMot2 = IC_Val2Mot2 - IC_Val1Mot2;
+			}
+			else if(IC_Val1Mot2 > IC_Val2Mot2)
+			{
+				DiffMot2 = (0xffffffff - IC_Val1Mot2) + IC_Val2Mot2;
+			}
+
+			float refClock = TIMCLK/(PRESCALAR);
+			frequencyMot2 = refClock/DiffMot2;
+
+			__HAL_TIM_SET_COUNTER(htim,0);
+			first_cap_flagMot2 = 0;
+		}
+	}
+	*/
 }
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM3) {
-        // if you want, you can detect “no pulse” here (timeout)
-        // e.g., zero ic_has_lock after some ms without captures
-    }
-}
+
 
 
 
@@ -506,14 +444,13 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
   esc_init();
 
   // apply initial µs (will be overwritten by commands)
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 1050);
   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 1050);
-
-  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
-  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
 
   adc_try_start();          // non-fatal start (sets g_adc_ok)
 
@@ -521,9 +458,6 @@ int main(void)
   uint32_t last_hello = HAL_GetTick();
 
   hx711_init();
-
-  //Calibrate Current ADC after all Inits are complete
-  current_calibrate_zero();
 
   /* USER CODE END 2 */
 
@@ -533,7 +467,6 @@ int main(void)
   {
 	  comm_poll();
 	  telemetry_service();
-	  heartbeat_service();
 	  /*
 	  if (HAL_GetTick() - last_hello >= 1000) {
 	    last_hello += 1000;
