@@ -193,15 +193,24 @@ class Link:
             curr1 = i32_le(tlvs.get(TLV_I1_MA, b""))
             curr2 = i32_le(tlvs.get(TLV_I2_MA, b""))
 
+            ic1_period_us = u32_le(tlvs.get(0xA0, None), 0);
+            ic2_period_us = u32_le(tlvs.get(0xA1, None), 0);
+            ic1_irq = u32_le(tlvs.get(0xA2, None), 0);
+            ic2_irq = u32_le(tlvs.get(0xA3, None), 0);
+
             self._emit({"type":"log","msg":f"< TEL_A ts_ms={ts} load_raw={raw} esc1={e1}us esc2={e2}us "
-                                            f"vin1={vin1}mV vin2={vin2}mV rpm1={rpm1} ic_irqs={ic_irqs} per_us={ic_per} seq={seq} raw_pa3={raw_pa3} raw_pa4={raw_pa4} raw_VREFINT={raw_VREFINT}{rlog} curr1={curr1}mA curr2={curr2}mA"})
+                                            f"vin1={vin1}mV vin2={vin2}mV rpm1={rpm1} rpm2={rpm2} ic1_irq ={ic2_irq} ic1_irq ={ic2_irq} ic1_period_us ={ic1_period_us} ic2_period_us ={ic2_period_us} seq={seq} raw_pa3={raw_pa3} raw_pa4={raw_pa4} raw_VREFINT={raw_VREFINT}{rlog} curr1={curr1}mA curr2={curr2}mA"})
 
             # emit a structured sample for the UI
             msg = {"host_ms": now_ms, "dev_ms": ts, "load_raw": raw}
-            if e1:   msg["esc1_us"] = e1
-            if e2:   msg["esc2_us"] = e2
-            if rpm1: msg["rpm1"]    = rpm1
-            if rpm2: msg["rpm2"]    = rpm2
+            if tlvs.get(TLV_ESC1_US) is not None:
+                msg["esc1_us"] = e1
+            if tlvs.get(TLV_ESC2_US) is not None:
+                msg["esc2_us"] = e2
+            if tlvs.get(TLV_ESC_RPM1) is not None:
+                msg["rpm1"] = rpm1
+            if tlvs.get(TLV_ESC_RPM2) is not None:
+                msg["rpm2"] = rpm2
             msg["vin1_mv"] = vin1
             msg["vin2_mv"] = vin2
             msg["curr1_ma"] = curr1

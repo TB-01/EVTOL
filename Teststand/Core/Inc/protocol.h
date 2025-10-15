@@ -45,6 +45,7 @@ enum {
   CMD_SNAPSHOT    = 0x00000001,  // request one telemetry frame
   CMD_STREAM   = 0x00000002, //command a telemetry stream
   CMD_SET_ESC  = 0x00000010, // set one ESC channel
+  CMD_CALIB_I_ZERO = 0x00000020,   // capture zero for PA0/PA1 (Hall sensors)
 };
 
 //Known IDs

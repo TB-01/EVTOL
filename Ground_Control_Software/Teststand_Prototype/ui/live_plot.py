@@ -25,6 +25,20 @@ class LivePlotFrame(ctk.CTkFrame):
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
+        # --- Throttle overlay (right y-axis) ---
+        self.ax2 = self.ax.twinx()
+        self.ax2.set_ylabel("% throttle", fontsize=13)
+        self.ax2.tick_params(axis='y', labelsize=12)
+        self.ax2.set_ylim(0, 100)
+
+        # separate buffers for throttle overlay
+        self.buf_th1 = deque()
+        self.buf_th2 = deque()
+
+        # 2 overlay lines (styles only; default colors)
+        (self.line_th1,) = self.ax2.plot([], [], lw=1.0, linestyle="--")
+        (self.line_th2,) = self.ax2.plot([], [], lw=1.0, linestyle=":")
+
         self._min_dt = 1.0 / max(5, fps)
         self._last_draw = 0.0
         self._resizing_until = 0.0
@@ -49,8 +63,13 @@ class LivePlotFrame(ctk.CTkFrame):
     def clear(self):
         self.t0 = None
         self.buf.clear()
+        self.buf_th1.clear()
+        self.buf_th2.clear()
         self.line.set_data([], [])
+        self.line_th1.set_data([], [])
+        self.line_th2.set_data([], [])
         self.ax.relim(); self.ax.autoscale_view()
+        self.ax2.set_ylim(0, 100)
         self.canvas.draw_idle()
 
     def add_sample(self, host_ms: int, y):
@@ -67,6 +86,15 @@ class LivePlotFrame(ctk.CTkFrame):
             # fixed mode: keep all; no pop
             pass
 
+    def _render_overlay(self, buf):
+        n = len(buf)
+        if n == 0:
+            return [], []
+        stride = max(1, math.ceil(n / self.max_points))
+        xs = [buf[i][0] for i in range(0, n, stride)]
+        ys = [buf[i][1] for i in range(0, n, stride)]
+        return xs, ys
+
     def _render_data(self):
         n = len(self.buf)
         if n == 0:
@@ -79,41 +107,48 @@ class LivePlotFrame(ctk.CTkFrame):
     def _tick(self):
         now = time.time()
         if now < self._resizing_until:
-            # skip drawing during active resize
-            self.after(75, self._tick)
-            return
+            self.after(75, self._tick); return
         if (now - self._last_draw) < self._min_dt:
-            self.after(25, self._tick)
-            return
+            self.after(25, self._tick); return
 
-        xs, ys = self._render_data()
-        if xs:
-            self.line.set_data(xs, ys)
+        xs, ys   = self._render_data()
+        xs1, ys1 = self._render_overlay(self.buf_th1)
+        xs2, ys2 = self._render_overlay(self.buf_th2)
 
+        # update all three lines regardless of which has data
+        self.line.set_data(xs, ys)
+        self.line_th1.set_data(xs1, ys1)
+        self.line_th2.set_data(xs2, ys2)
+
+        # choose the most recent x from any buffer
+        any_xs = xs or xs1 or xs2
+        if any_xs:
             if self.mode == "fixed" and self.fixed_total_s:
                 left, right = 0, self.fixed_total_s
             else:
-                left = max(0, xs[-1] - self.window_s)
-                right = max(self.window_s, xs[-1])
-
-            # only adjust if changed significantly (avoids heavy relayout)
+                xlast = (xs[-1] if xs else (xs1[-1] if xs1 else xs2[-1]))
+                left  = max(0, xlast - self.window_s)
+                right = max(self.window_s, xlast)
             if self.ax.get_xlim() != (left, right):
                 self.ax.set_xlim(left, right)
 
-            # y-limits pad
+        # y-limits only from thrust curve if present (keeps overlay uncluttered)
+        if ys:
             ymin, ymax = min(ys), max(ys)
             if ymin == ymax:
                 ymin -= 1; ymax += 1
             pad = 0.05 * (ymax - ymin)
-            cur_ylim = self.ax.get_ylim()
             new_ylim = (ymin - pad, ymax + pad)
-            if (abs(cur_ylim[0]-new_ylim[0]) > 1e-6) or (abs(cur_ylim[1]-new_ylim[1]) > 1e-6):
+            if self.ax.get_ylim() != new_ylim:
                 self.ax.set_ylim(*new_ylim)
 
-            self.canvas.draw_idle()
-            self._last_draw = now
+        # keep right axis fixed
+        self.ax2.set_ylim(0, 100)
 
+        self.canvas.draw_idle()
+        self._last_draw = now
         self.after(75, self._tick)
+
     
     def set_mode_live(self, window_s=None):
         self.mode = "live"
@@ -123,11 +158,39 @@ class LivePlotFrame(ctk.CTkFrame):
         self.clear()
 
     def set_mode_fixed(self, total_s: float):
-        """Fixed x-axis [0..total_s]. Does NOT clear data automatically."""
+        """Fixed x-axis [0..total_s]."""
         self.mode = "fixed"
         self.fixed_total_s = float(total_s)
         self.t0 = None
+
+        # clear all buffers (main + overlay)
         self.buf.clear()
+        self.buf_th1.clear()
+        self.buf_th2.clear()
+
         self.line.set_data([], [])
+        self.line_th1.set_data([], [])
+        self.line_th2.set_data([], [])
+
         self.ax.set_xlim(0, max(1.0, self.fixed_total_s))
+        self.ax2.set_ylim(0, 100)
         self.canvas.draw_idle()
+
+
+    def add_throttle(self, host_ms: int, m1_pct=None, m2_pct=None):
+        """Overlay throttle % for M1/M2 at the same x (time) as the thrust data."""
+        if self.t0 is None:
+            self.t0 = host_ms
+        t = (host_ms - self.t0) / 1000.0
+        if m1_pct is not None:
+            self.buf_th1.append((t, float(m1_pct)))
+        if m2_pct is not None:
+            self.buf_th2.append((t, float(m2_pct)))
+
+        if self.mode == "live":
+            tmin = t - self.window_s
+            while self.buf_th1 and self.buf_th1[0][0] < tmin:
+                self.buf_th1.popleft()
+            while self.buf_th2 and self.buf_th2[0][0] < tmin:
+                self.buf_th2.popleft()
+        # fixed mode: keep all

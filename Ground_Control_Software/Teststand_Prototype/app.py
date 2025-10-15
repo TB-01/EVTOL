@@ -4,6 +4,8 @@ import customtkinter as ctk
 from core.link import Link
 from ui.terminal import TerminalFrame
 from ui.live_plot import LivePlotFrame
+import csv
+from datetime import datetime
 
 import os, json, time, queue
 # (you already import time, queue — keeping them here for clarity)
@@ -45,8 +47,53 @@ class App(ctk.CTk):
         self.q = queue.Queue()
         self.link = Link(on_event=self._enqueue)
         self._reqid = 0
+        self._plot_frozen = False
+        self._last_kg   = None
+        self._last_pct1 = None
+        self._last_pct2 = None
 
 
+        self.test_programs = {
+            "Throttle Range": [
+                (0,   0,  1.0),
+                (10, 10,  1.5),
+                (20, 20,  1.5),
+                (30, 30,  1.5),
+                (40, 40,  1.5),
+                (50, 50,  1.5),
+                (60, 60,  1.5),
+                (70, 70,  1.5),
+                (80, 80,  1.5),
+                (90, 90,  1.5),
+                (100, 100,  1.5),
+                (50, 50,  1.5),
+                (0,   0,  1.0),
+            ],
+            "Static Test": [
+                (70, 70, 10.0),
+                (0,   0,  1.0),
+            ],
+            "Dynamic Response": [
+                (0,   0,  1.0),
+                (50, 50,  0.8),
+                (0,   0,  1),
+                (70, 70,  0.8),
+                (0,   0,  1),
+                (100, 100,  0.8),
+                (0,   0,  1.5),
+            ],
+            "Manual": []  # no predefined steps
+        }
+        # Test States
+        self._test_running = False
+        self._test_steps = []
+        self._test_i = 0
+        self._test_t0_ms = 0
+        self._test_end_ms = 0
+        self._last_cmd_sent_for_i = -1
+        self._rec = []             # current run samples
+        self._last_result = None   # stash of the last completed run (list of dicts)
+        self._last_result_meta = {}
 
         # ====== MAIN GRID: 2 columns (left content, right telemetry) + bottom control row ======
         root = ctk.CTkFrame(self)
@@ -136,8 +183,7 @@ class App(ctk.CTk):
         self.manual_thr.grid(row=1, column=0, sticky="w", padx=8)
         ctk.CTkLabel(bl, text="%").grid(row=1, column=1, sticky="w")
 
-        self.btn_start = ctk.CTkButton(bl, text="Start Test", command=self._not_implemented)
-        self.btn_start.grid(row=3, column=2, padx=10)
+        
 
         self.btn_tare = ctk.CTkButton(bl, text="Tare", command=self._on_tare)
         self.btn_tare.grid(row=1, column=4, padx=10)
@@ -145,12 +191,14 @@ class App(ctk.CTk):
 
         
 
-        # Test mode + Save
+        # Test mode + Start + Save
         ctk.CTkLabel(bl, text="Test mode").grid(row=2, column=0, sticky="w", padx=8, pady=(8,2))
-        self.test_mode = ctk.CTkOptionMenu(bl, values=["Manual","Throttle Range","Static Test","Dynamic Response"])
+        self.test_mode = ctk.CTkOptionMenu(bl, values=["Manual","Throttle Range","Static Test","Dynamic Response"],command=self._on_test_mode_changed)
         self.test_mode.set("Manual")
         self.test_mode.grid(row=3, column=0, sticky="w", padx=8)
-        self.btn_save = ctk.CTkButton(bl, text="Save Result", command=self._not_implemented)
+        self.btn_start = ctk.CTkButton(bl, text="Start Test", command=self._on_start_test)
+        self.btn_start.grid(row=3, column=2, padx=10)
+        self.btn_save = ctk.CTkButton(bl, text="Save Result", command=self._on_save_result)
         self.btn_save.grid(row=3, column=3, padx=10)
 
         # Calibration
@@ -291,61 +339,112 @@ class App(ctk.CTk):
                     self._append_log(f"# {evt['msg']}")
                 elif typ == "sample":
                     data = evt.get("msg", {})
-                    host_ms  = data.get("host_ms", int(time.time()*1000))
-                    load_raw = data.get("load_raw", None)
-                    dev_ms   = data.get("dev_ms", None)
+                    try:
+                        host_ms  = data.get("host_ms", int(time.time()*1000))
+                        load_raw = data.get("load_raw", None)
+                        dev_ms   = data.get("dev_ms", None)
+                        
+                        # ---- Voltage and CUrrent ----
+                        vin1 = data.get("vin1_mv")
+                        if vin1 is not None:
+                            self.m1_voltage.set(f"{vin1/1000:.2f}")   # Motor 1 Voltage label
 
-                    vin1 = data.get("vin1_mv")
-                    if vin1 is not None:
-                        self.m1_voltage.set(f"{vin1/1000:.2f}")   # Motor 1 Voltage label
+                        vin2 = data.get("vin2_mv")
+                        if vin2 is not None:
+                            self.m2_voltage.set(f"{vin2/1000:.2f}")   # Motor 2 Voltage label
 
-                    vin2 = data.get("vin2_mv")
-                    if vin2 is not None:
-                        self.m2_voltage.set(f"{vin2/1000:.2f}")   # Motor 2 Voltage label
+                        curr1 = data.get("curr1_ma")
+                        if curr1 is not None:
+                            self.m1_current.set(f"{curr1/1000:.2f}")   # Motor 1 Current label
+                        
+                        curr2 = data.get("curr2_ma")
+                        if curr2 is not None:
+                            self.m2_current.set(f"{curr2/1000:.2f}")   # Motor 2 Current label
 
-                    curr1 = data.get("curr1_ma")
-                    if curr1 is not None:
-                        self.m1_current.set(f"{curr1/1000:.2f}")   # Motor 1 Current label
-                    
-                    curr2 = data.get("curr2_ma")
-                    if curr2 is not None:
-                        self.m2_current.set(f"{curr2/1000:.2f}")   # Motor 2 Current label
+                        # collect for tare/cal
+                        if self._cap_mode is not None and load_raw is not None:
+                            self._cap_samples.append(float(load_raw))
+                            self._finish_capture_if_ready(host_ms)
 
-                    # collect for tare/cal
-                    if self._cap_mode is not None and load_raw is not None:
-                        self._cap_samples.append(float(load_raw))
-                        self._finish_capture_if_ready(host_ms)
+                        # live conversion to kg (if we have tare + scale)
+                        kg = None if load_raw is None else self._apply_calibration(load_raw)
 
-                    # live conversion to kg (if we have tare + scale)
-                    kg = None if load_raw is None else self._apply_calibration(load_raw)
+                        # ---- PLOT IN KG ----
+                        if kg is not None:
+                            if (self._test_running or not self._plot_frozen):
+                                self.plot.add_sample(host_ms, kg)
+                            self.total_thrust.set(f"{kg:.3f}")  # update the Totals panel in kg
+                            self._last_kg = kg
 
-                    # ---- PLOT IN KG ----
-                    if kg is not None:
-                        self.plot.add_sample(host_ms, kg)
-                        self.total_thrust.set(f"{kg:.3f}")  # update the Totals panel in kg
+                        # show raw if you like
+                        if load_raw is not None:
+                            self.load_raw_var.set(str(load_raw))
 
-                    # show raw if you like
-                    if load_raw is not None:
-                        self.load_raw_var.set(str(load_raw))
+                        p1_w = None
+                        p2_w = None
+                        if vin1 is not None and curr1 is not None:
+                            p1_w = (vin1 * curr1) / 1_000_000.0  # mV * mA -> W
+                            self.m1_power.set(f"{p1_w:.1f}")
+                        if vin2 is not None and curr2 is not None:
+                            p2_w = (vin2 * curr2) / 1_000_000.0
+                            self.m2_power.set(f"{p2_w:.1f}")
 
-                    # ---------- NEW: update RPM + throttle labels ----------
-                    rpm1 = data.get("rpm1")
-                    if rpm1 is not None:
-                        self.m1_speed.set(str(rpm1))
+                        if p1_w is not None or p2_w is not None:
+                            tot_w = (p1_w or 0.0) + (p2_w or 0.0)
+                            self.total_power.set(f"{tot_w:.1f}")
 
-                    rpm2 = data.get("rpm2")
-                    if rpm2 is not None:
-                        self.m2_speed.set(str(rpm2))
+                            # if we have thrust in kg (kg computed below as 'kg'), update g/W
+                            if kg is not None and tot_w > 1e-6:
+                                self.thrust_per_w.set(f"{kg * 1000.0 / tot_w:.2f}")
 
-                    e1us = data.get("esc1_us")
-                    if e1us:
-                        pct = max(0.0, min(100.0, (e1us - 1050) * 100.0 / (1940 - 1050)))
-                        self.m1_throttle.set(f"{pct:.0f}")
+                        
 
-                    e2us = data.get("esc2_us")
-                    if e2us:
-                        pct = max(0.0, min(100.0, (e2us - 1050) * 100.0 / (1940 - 1050)))
-                        self.m2_throttle.set(f"{pct:.0f}")
+                        # ---------- update RPM + throttle labels ----------
+                        rpm1 = data.get("rpm1")
+                        if rpm1 is not None:
+                            self.m1_speed.set(str(rpm1))
+
+                        rpm2 = data.get("rpm2")
+                        if rpm2 is not None:
+                            self.m2_speed.set(str(rpm2))
+
+                        e1us = data.get("esc1_us")
+                        e2us = data.get("esc2_us")
+                        pct1 = self._us_to_pct(e1us) if e1us is not None else None
+                        pct2 = self._us_to_pct(e2us) if e2us is not None else None
+
+                        if pct1 is not None: self.m1_throttle.set(f"{pct1:.0f}")
+                        if pct2 is not None: self.m2_throttle.set(f"{pct2:.0f}")
+
+                        if (self._test_running or not self._plot_frozen) and (pct1 is not None or pct2 is not None):
+                            self.plot.add_throttle(host_ms, pct1, pct2)
+
+                        self._last_pct1 = pct1
+                        self._last_pct2 = pct2
+
+                        if self._test_running:
+                            # derive percents from ESC us if present
+
+                            row = {
+                                "t_s": (host_ms - self._test_t0_ms)/1000.0 if self._test_t0_ms else None,
+                                "esc1_pct": self.us_to_pct(data.get("esc1_us")),
+                                "esc2_pct": self.us_to_pct(data.get("esc2_us")),
+                                "rpm1": data.get("rpm1"),
+                                "rpm2": data.get("rpm2"),
+                                "vin1_v": None if vin1 is None else vin1/1000.0,
+                                "vin2_v": None if vin2 is None else vin2/1000.0,
+                                "curr1_a": None if curr1 is None else curr1/1000.0,
+                                "curr2_a": None if curr2 is None else curr2/1000.0,
+                                "p1_w": p1_w,
+                                "p2_w": p2_w,
+                                "p_tot_w": (p1_w or 0.0) + (p2_w or 0.0) if (p1_w is not None or p2_w is not None) else None,
+                                "thrust_kg": kg,
+                                "g_per_w": None if (kg is None or (p1_w or 0.0)+(p2_w or 0.0) <= 1e-6)
+                                        else kg*1000.0/((p1_w or 0.0)+(p2_w or 0.0))
+                            }
+                            self._rec.append(row)
+                    except Exception as e:
+                        self._append_log(f"! sample handling error: {e}")
 
                     
         except queue.Empty:
@@ -391,6 +490,7 @@ class App(ctk.CTk):
         self._append_log("# /help | /ports | /connect [COMx] [baud] | /disconnect | /ping | /snapshot [reqid] | /stream on [ms]|off | /hex <bytes> | /clear")
     def _not_implemented(self): self._append_log("! (todo)")
 
+    ## --- Button Callbacks ---
     def on_close(self):
         try: self.link.close()
         except: pass
@@ -429,6 +529,7 @@ class App(ctk.CTk):
     def _on_estop(self, *_):
         self.link.send_set_esc(1, 1050)
         self.link.send_set_esc(2, 1050)
+        self._stop_test()
         self._append_log("# EMERGENCY STOP: both ESC -> 1050us")
 
     def _on_calib_currents(self):
@@ -452,6 +553,15 @@ class App(ctk.CTk):
         self._cal_mass_kg = mass_kg  # store for finish step
         self._start_capture(mode="cal", duration_ms=2000, min_samples=25)
         self._append_log(f"# Calibration started — place {mass_kg} kg and hold steady")
+    
+    def _on_test_mode_changed(self, value: str):
+        # If user goes back to 'Manual', unfreeze and show live view again
+        if str(value).strip().lower() == "manual":
+            # ensure no test is running
+            self._stop_test()
+            self.plot.set_mode_live(window_s=5.0)
+            self._set_plot_frozen(False)
+            self._append_log("# Switched to Manual — live view resumed")
 
     def _start_capture(self, mode: str, duration_ms: int, min_samples: int):
         self._cap_mode = mode
@@ -566,6 +676,176 @@ class App(ctk.CTk):
             self._append_log(f"! Failed to remove calibration file: {e}")
         # Optional: reset plot label (keeps the data)
         self.plot.set_units(title="Thrust (kg)", y_label="kg")
+
+    def _pct_to_us(self, pct: float) -> int:
+        pct = max(0.0, min(100.0, float(pct)))
+        return int(1050 + (1940 - 1050) * (pct / 100.0))
+    
+    def _us_to_pct(self, us):
+        try:
+            us = int(us)
+        except (TypeError, ValueError):
+            return None
+        us = max(1050, min(1940, us))
+        return (us - 1050) * 100.0 / (1940 - 1050)
+    
+    # --- Test Handling ---
+    def _on_start_test(self):
+        mode = self.test_mode.get()
+        steps = self.test_programs.get(mode, [])
+        if not steps:
+            self._append_log(f"! No predefined steps for mode '{mode}'")
+            return
+
+        # Build schedule and compute total duration
+        total_s = sum(d for (_, _, d) in steps)
+        self._set_plot_frozen(False)
+        self.plot.set_mode_fixed(total_s)     # fixed x-axis [0..total_s]
+        self._append_log(f"# Test '{mode}' total {total_s:.2f}s, {len(steps)} steps")
+
+        # Start/force streaming at a sane rate (e.g., 120 ms) and reflect UI
+        try:
+            per = int(self.stream_period.get())
+        except Exception:
+            per = 120
+        per = max(20, min(500, per))
+        self.link.send_stream(per)
+        if not self._streaming:
+            self._streaming = True
+            self.btn_stream_toggle.configure(text="Stop Stream")
+
+        # Init runner state
+        self._test_running = True
+        self._test_steps = steps[:]
+        self._test_i = 0
+        self._test_t0_ms = int(time.time() * 1000)
+        self._test_end_ms = self._test_t0_ms + int(total_s * 1000)
+        self._last_cmd_sent_for_i = -1
+        self._rec = []
+        self._last_result = None
+        self._last_result_meta = {
+            "mode": mode,
+            "started_epoch_ms": self._test_t0_ms,
+            "stream_period_ms": per
+        }
+
+        self.btn_start.configure(state="disabled")
+        self.btn_save.configure(state="disabled")
+        self._append_log("# Test started")
+        self.after(10, self._test_tick)
+
+    def _test_tick(self):
+        if not self._test_running:
+            return
+        now = int(time.time() * 1000)
+
+        # Determine current step by elapsed time
+        elapsed_s = (now - self._test_t0_ms) / 1000.0
+        t = 0.0
+        idx = 0
+        for i, (_, _, dur) in enumerate(self._test_steps):
+            t_next = t + dur
+            if elapsed_s < t_next:
+                idx = i
+                break
+            t = t_next
+        else:
+            # past last step -> finish
+            self._finish_test()
+            return
+
+        # Send command on step transition only
+        if idx != self._last_cmd_sent_for_i:
+            p1, p2, dur = self._test_steps[idx]
+            us1 = self._pct_to_us(p1)
+            us2 = self._pct_to_us(p2)
+            self.link.send_set_esc(1, us1)
+            self.link.send_set_esc(2, us2)
+            self._append_log(f"# step {idx+1}/{len(self._test_steps)}: "
+                            f"{p1:.0f}%/{p2:.0f}% for {dur:.2f}s")
+            self._last_cmd_sent_for_i = idx
+
+        # schedule next tick
+        self.after(30, self._test_tick)
+
+    def _finish_test(self):
+        # safety: cut throttle
+        self.link.send_set_esc(1, 1050)
+        self.link.send_set_esc(2, 1050)
+
+        self._test_running = False
+        self.btn_start.configure(state="normal")
+        self.btn_save.configure(state="normal")
+
+        # stash the run for saving
+        self._last_result = list(self._rec)
+        self._last_result_meta["ended_epoch_ms"] = int(time.time()*1000)
+        self._append_log("# Test finished")
+
+
+        # extend lines to the right boundary so the frame is fully filled
+        try:
+            if self.plot.mode == "fixed" and self.plot.fixed_total_s and self.plot.t0:
+                host_cap = int(self.plot.t0 + self.plot.fixed_total_s * 1000)
+                if self._last_kg is not None:
+                    self.plot.add_sample(host_cap, self._last_kg)
+                if (self._last_pct1 is not None) or (self._last_pct2 is not None):
+                    self.plot.add_throttle(host_cap, self._last_pct1, self._last_pct2)
+        except Exception:
+            pass
+        
+        #keep the plot frozen at the end of the test
+        self._set_plot_frozen(True)
+
+    def _stop_test(self):
+        if self._test_running:
+            self._append_log("# Test aborted")
+            self._finish_test()
+    
+    def _on_save_result(self):
+        if not self._last_result:
+            self._append_log("! No completed test to save")
+            return
+
+        # where to store
+        out_dir = os.path.join(os.path.expanduser("~"), ".teststand", "results")
+        os.makedirs(out_dir, exist_ok=True)
+
+        meta = self._last_result_meta or {}
+        mode = meta.get("mode", "Test")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"{mode.replace(' ', '_')}_{ts}.csv"
+        path = os.path.join(out_dir, fname)
+
+        # write
+        fieldnames = [
+            "t_s","esc1_pct","esc2_pct","rpm1","rpm2",
+            "vin1_v","vin2_v","curr1_a","curr2_a",
+            "p1_w","p2_w","p_tot_w","thrust_kg","g_per_w"
+        ]
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=fieldnames)
+                # header + a tiny metadata preface as comments
+                f.write(f"# mode,{mode}\n")
+                f.write(f"# stream_period_ms,{meta.get('stream_period_ms')}\n")
+                w.writeheader()
+                for r in self._last_result:
+                    w.writerow({k: r.get(k) for k in fieldnames})
+            self._append_log(f"# Saved: {path}")
+            self.plot.set_mode_live(window_s=5.0)
+            self._set_plot_frozen(False)
+        except Exception as e:
+            self._append_log(f"! Save failed: {e}")
+
+    def _set_plot_frozen(self, frozen: bool):
+        self._plot_frozen = bool(frozen)
+        # Cosmetic: mark the plot title while frozen; ignore if plot not yet in kg mode
+        try:
+            title = "Thrust (kg) — FROZEN" if self._plot_frozen else "Thrust (kg)"
+            self.plot.set_units(title=title, y_label="kg")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     app = App()

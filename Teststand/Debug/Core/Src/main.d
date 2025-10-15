@@ -32,7 +32,8 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal_uart_ex.h \
  ../Core/Inc/adc.h ../Core/Inc/main.h ../Core/Inc/dma.h ../Core/Inc/i2c.h \
  ../Core/Inc/tim.h ../Core/Inc/usart.h ../Core/Inc/gpio.h \
- ../Core/Src/comm.h ../Core/Src/protocol.h ../Core/Inc/hx711.h
+ ../Core/Inc/comm.h ../Core/Inc/usart.h ../Core/Inc/protocol.h \
+ ../Core/Inc/hx711.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F0xx_HAL_Driver/Inc/stm32f0xx_hal.h:
 ../Core/Inc/stm32f0xx_hal_conf.h:
@@ -72,6 +73,7 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/tim.h:
 ../Core/Inc/usart.h:
 ../Core/Inc/gpio.h:
-../Core/Src/comm.h:
-../Core/Src/protocol.h:
+../Core/Inc/comm.h:
+../Core/Inc/usart.h:
+../Core/Inc/protocol.h:
 ../Core/Inc/hx711.h:

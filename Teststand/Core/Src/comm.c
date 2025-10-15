@@ -251,6 +251,8 @@ static void deliver_checked(const uint8_t *frame, uint16_t len){
 
 void comm_poll(void)
 {
+	// Fallback: keep DMA head fresh even if IDLE interrupt doesn’t fire
+	rx_dma_head = dma_head_now();
 	while (rx_cons != rx_dma_head){
 	        switch (pstate){
 
