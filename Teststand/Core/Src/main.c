@@ -44,7 +44,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define TIMCLK 48000000
-#define PRESCALER 4800
+#define PRESCALER 480
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -340,16 +340,16 @@ static void telemetry_service(void)
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
-	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)
 	{
 		if(first_cap_flagMot1 == 0)
 		{
-			IC_Val1Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+			IC_Val1Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
 			first_cap_flagMot1 = 1;
 		}
 		else
 		{
-			IC_Val2Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+			IC_Val2Mot1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
 
 			if(IC_Val2Mot1 > IC_Val1Mot1)
 			{
